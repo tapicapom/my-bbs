@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ネットで動く簡易掲示板（スパム対策版）</title>
+    <style>
+        body { font-family: sans-serif; max-width: 600px; margin: 20px auto; padding: 0 10px; background: #f9f9f9; color: #333; }
+        h1 { text-align: center; color: #444; }
+        .form-group { margin-bottom: 12px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input[type="text"], textarea { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+        textarea { height: 80px; resize: vertical; }
+        button { width: 100%; padding: 10px; background: #28a745; color: white; border: none; border-radius: 4px; font-size: 16px; cursor: pointer; }
+        button:hover { background: #218838; }
+        button:disabled { background: #aaa; cursor: not-allowed; }
+        .post-list { margin-top: 30px; }
+        .post { background: white; padding: 15px; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 15px; }
+        .post-header { display: flex; justify-content: space-between; font-size: 13px; color: #666; margin-bottom: 8px; border-bottom: 1px solid #eee; padding-bottom: 4px; }
+        .post-name { font-weight: bold; color: #333; }
+        .post-body { white-space: pre-wrap; word-break: break-all; line-height: 1.5; }
+        .loading { text-align: center; color: #666; font-style: italic; }
+        
+        /* 【対策1】人間には見えない隠しフォーム（ハニーポット） */
+        .hidden-field { display: none !important; }
+    </style>
+</head>
+<body>
+
+    <h1>🌐 オンライン掲示板</h1>
+
+    <div class="post">
+        <!-- 【対策1】ロボットを引っかけるための罠。人間には見えません -->
+        <div class="form-group hidden-field">
+            <label>ここは入力しないでください（ロボット除け）</label>
+            <input type="text" id="honey_pot" autocomplete="off">
+        </div>
+
+        <div class="form-group">
+            <label>ニックネーム</label>
+            <input type="text" id="username" placeholder="名無しさん" max="20">
+        </div>
+        <div class="form-group">
+            <label>メッセージ</label>
+            <textarea id="message" placeholder="ここにメッセージを入力してください（必須）" required></textarea>
+        </div>
+
+        <!-- 【対策2】人間にしか解けない簡単なクイズ -->
+        <div class="form-group">
+            <label style="color: #d9534f;">🤖 スパム対策クイズ： 5 ＋ 3 は？ （半角数字で）</label>
+            <input type="text" id="spam_quiz" placeholder="答えを入力" required>
+        </div>
+
+        <button id="submit-btn" onclick="submitPost()">投稿する</button>
+    </div>
+
+    <div class="post-list" id="post-list">
+        <div class="loading">データを読み込んでいます...</div>
+    </div>
+
+    <script>
+        const API_URL = 'https://jsonbin.io';
+        
+        window.addEventListener('DOMContentLoaded', fetchPosts);
+
+        async function fetchPosts() {
+            const listEl = document.getElementById('post-list');
+            try {
+                const response = await fetch(`${API_URL}/latest`, { headers: { 'X-Bin-Meta': 'false' } });
+                if (!response.ok) throw new Error('データの取得に失敗しました');
+                const posts = await response.json();
+                listEl.innerHTML = '';
+
+                if (!Array.isArray(posts) || posts.length === 0) {
+                    listEl.innerHTML = '<div class="loading">まだ投稿はありません。</div>';
+                    return;
+                }
+
+                posts.reverse().forEach(post => {
+                    const postEl = document.createElement('div');
+                    postEl.className = 'post';
+                    postEl.innerHTML = `
+                        <div class="post-header">
+                            <span class="post-name">${escapeHTML(post.name || '名無しさん')}</span>
+                            <span>${escapeHTML(post.date || '')}</span>
+                        </div>
+                        <div class="post-body">${escapeHTML(post.message || '')}</div>
+                    `;
+                    listEl.appendChild(postEl);
+                });
+            } catch (error) {
+                listEl.innerHTML = '<div class="loading" style="color:red;">データの読み込みに失敗しました。</div>';
+            }
+        }
+
+        async function submitPost() {
+            const nameInput = document.getElementById('username');
+            const msgInput = document.getElementById('message');
+            const submitBtn = document.getElementById('submit-btn');
+            
+            // 対策の入力欄を取得
+            const honeyPot = document.getElementById('honey_pot').value;
+            const spamQuiz = document.getElementById('spam_quiz').value.trim();
+
+            // 【対策1の判定】隠し欄に何か書かれていたらロボットとみなしてブロック
+            if (honeyPot !== "") {
+                alert("ロボットによる投稿と判定されました。");
+                return;
+            }
+
+            // 【対策2の判定】クイズの答えが間違っていたらブロック
+            if (spamQuiz !== "8") {
+                alert("スパム対策クイズの答えが正しくありません。");
+                return;
+            }
+
+            const name = nameInput.value.trim() || '名無しさん';
+            const message = msgInput.value.trim();
+
+            if (!message) {
+                alert('メッセージを入力してください。');
+                return;
+            }
+
+            submitBtn.disabled = true;
+            submitBtn.innerText = '送信中...';
+
+            try {
+                const getRes = await fetch(`${API_URL}/latest`, { headers: { 'X-Bin-Meta': 'false' } });
+                let currentPosts = [];
+                if (getRes.ok) {
+                    currentPosts = await getRes.json();
+                    if (!Array.isArray(currentPosts)) currentPosts = [];
+                }
+
+                const now = new Date();
+                const newPost = {
+                    name: name,
+                    message: message,
+                    date: `${now.getFullYear()}/${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`
+                };
+
+                currentPosts.push(newPost);
+                if (currentPosts.length > 100) currentPosts = currentPosts.slice(-100);
+
+                const putRes = await fetch(API_URL, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(currentPosts)
+                });
+
+                if (!putRes.ok) throw new Error('投稿に失敗しました');
+
+                msgInput.value = '';
+                document.getElementById('spam_quiz').value = ''; // クイズ欄もクリア
+                await fetchPosts();
+
+            } catch (error) {
+                alert('投稿に失敗しました。');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.innerText = '投稿する';
+            }
+        }
+
+        function escapeHTML(str) {
+            return str.replace(/[&<>"']/g, match => {
+                const escape = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+                return escape[match];
+            });
+        }
+    </script>
+</body>
+</html>
